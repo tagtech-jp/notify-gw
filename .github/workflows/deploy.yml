@@ -131,7 +131,25 @@ jobs:
           else
             RESULT=failure; SEVERITY=CRITICAL; ERROR_KIND="deploy_${JOB_STATUS}"
           fi
-          curl -sS -m 10 -X POST "$NOTIFY_GW_URL/event" \
+          # 失敗を `|| echo ...(ignored)` で握りつぶさない(RUNBOOK「沈黙は異常」原則)。
+          # curl 自体の失敗(名前解決不可・接続不可等)と、応答はあるが非 2xx の場合の両方を拾い、
+          # ::warning:: で Actions 実行結果画面に可視化する。ただしこのステップの失敗で
+          # デプロイジョブ全体は失敗にしない(exit 0 を維持。デプロイ自体は上のステップで完了済み)。
+          # NOTIFY_GW_URL / NOTIFY_GW_KEY の値そのものは出力しない(exit code / HTTP status のみ)。
+          body_file=$(mktemp)
+          set +e
+          http_code=$(curl -sS -m 10 -o "$body_file" -w '%{http_code}' -X POST "$NOTIFY_GW_URL/event" \
             -H "X-Run-Key: $NOTIFY_GW_KEY" -H "Content-Type: application/json" \
-            -d "{\"agent_id\":\"github-actions/notify-gw\",\"action\":\"deploy\",\"target\":\"$SHA\",\"result\":\"$RESULT\",\"severity\":\"$SEVERITY\",\"error_kind\":\"$ERROR_KIND\",\"evidence_url\":\"$RUN_URL\"}" \
-            || echo "notify-gw report failed (ignored)"
+            -d "{\"agent_id\":\"github-actions/notify-gw\",\"action\":\"deploy\",\"target\":\"$SHA\",\"result\":\"$RESULT\",\"severity\":\"$SEVERITY\",\"error_kind\":\"$ERROR_KIND\",\"evidence_url\":\"$RUN_URL\"}")
+          curl_exit=$?
+          set -e
+          rm -f "$body_file"
+          if [ "$curl_exit" -ne 0 ]; then
+            echo "::warning::notify-gw report failed: curl exit code $curl_exit (通信自体が失敗。NOTIFY_GW_URL/NOTIFY_GW_KEY の設定を確認してください)"
+            exit 0
+          fi
+          if [ "$http_code" -lt 200 ] || [ "$http_code" -ge 300 ]; then
+            echo "::warning::notify-gw report failed: HTTP $http_code (デプロイ自体は上の結果のとおり。NOTIFY_GW_URL/NOTIFY_GW_KEY の設定を確認してください)"
+            exit 0
+          fi
+          echo "notify-gw へ証跡送信済み (HTTP $http_code)"
