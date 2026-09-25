@@ -67,7 +67,7 @@ describe("Vault への日次サマリコミット", () => {
     const calls = (global.fetch as ReturnType<typeof vi.fn>).mock.calls;
     const put = calls.find(([u, i]) => String(u).includes("api.github.com") && (i as RequestInit)?.method === "PUT");
     expect(put).toBeDefined();
-    expect(String(put![0])).toContain("/repos/nikkun22/tagtech-vault/contents/digest/notify-gw-2026-09-13.md");
+    expect(String(put![0])).toContain("/repos/tagtech-jp/tagtech-vault/contents/digest/notify-gw-2026-09-13.md");
 
     const sent = JSON.parse((put![1] as RequestInit).body as string) as { content: string; message: string; sha?: string };
     expect(sent.message).toContain("2026-09-13");

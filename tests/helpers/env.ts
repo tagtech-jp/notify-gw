@@ -12,7 +12,7 @@ export function makeEnv(overrides: Partial<Env> = {}): Env {
     TZ_OFFSET_HOURS: "9",
     FLOOD_WINDOW_MIN: "30",
     DIGEST_HOUR_JST: "9",
-    VAULT_REPO: "nikkun22/tagtech-vault",
+    VAULT_REPO: "tagtech-jp/tagtech-vault",
     VAULT_DIGEST_DIR: "digest",
     TOKEN_WARN_DAYS: "14",
     ...overrides,

@@ -123,7 +123,7 @@ HTTP ヘッダに載せる分には偶然通ってしまうが、`gh secret set`
 ```bash
 K=$(tr -d '\r\n' < .run-key.txt)      # 渡す用。値は画面に出さない
 [ ${#K} -eq 48 ] || { echo "ABORT: ${#K} 文字"; exit 1; }   # 長さを assert してから使う
-printf '%s' "$K" | gh secret set NOTIFY_GW_KEY -R nikkun22/<repo>
+printf '%s' "$K" | gh secret set NOTIFY_GW_KEY -R tagtech-jp/<repo>
 ```
 
 **Windows で作ったファイルには CR が入り得る。** エディタ・PowerShell の
@@ -1506,7 +1506,7 @@ PR #11（2026-05-09 にマージ済み）を操作**して、そのリモート�
 ### 9-3. マージ済みかは先に確認する。`gh pr merge` を再実行しない
 
 ```
-gh pr view <番号> -R nikkun22/<repo> --json state,mergedAt
+gh pr view <番号> -R tagtech-jp/<repo> --json state,mergedAt
 ```
 
 `state=MERGED` かつ `mergedAt` に日時が入っていればマージ済み。

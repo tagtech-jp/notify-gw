@@ -24,7 +24,7 @@
     "FLOOD_WINDOW_MIN": "30",
     "DIGEST_HOUR_JST": "9",
     // 日次証跡サマリの置き場(Cloudflare → GitHub → vault-sync → Obsidian の中継経路)
-    "VAULT_REPO": "nikkun22/tagtech-vault",
+    "VAULT_REPO": "tagtech-jp/tagtech-vault",
     "VAULT_DIGEST_DIR": "digest",
     // GITHUB_TOKEN(fine-grained PAT)の有効期限。秘密ではないので vars に置き、
     // 期限切れで黙って止まらないよう TOKEN_WARN_DAYS 日前から日報に WARN を出す。

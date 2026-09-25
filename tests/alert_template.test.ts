@@ -23,7 +23,7 @@ const base = {
   target: "e217444ffcb59d2b1d9436e8e10effd2da6e5669",
   errorKind: "deploy_failure",
   eventId: 300,
-  evidenceUrl: "https://github.com/nikkun22/tagtech-automation/actions/runs/34946597355",
+  evidenceUrl: "https://github.com/tagtech-jp/tagtech-automation/actions/runs/34946597355",
 };
 
 describe("buildCriticalPayload: 行動可能な本文", () => {
