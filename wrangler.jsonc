@@ -1,0 +1,46 @@
+{
+  // notify-gw — 通知ゲートウェイ兼証跡層
+  //
+  // 重要: Cron TriggerはUTC固定。JST = UTC + 9時間。
+  //       ここの crons と src/index.ts の CRON_MAP は必ず一致させること。
+  //
+  "name": "notify-gw",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-01",
+  "compatibility_flags": ["nodejs_compat"],
+
+  "observability": {
+    "enabled": true
+  },
+
+  "triggers": {
+    "crons": [
+      "5 0 * * *" // JST 09:05  digest-daily
+    ]
+  },
+
+  "vars": {
+    "TZ_OFFSET_HOURS": "9",
+    "FLOOD_WINDOW_MIN": "30",
+    "DIGEST_HOUR_JST": "9",
+    // 日次証跡サマリの置き場(Cloudflare → GitHub → vault-sync → Obsidian の中継経路)
+    "VAULT_REPO": "nikkun22/tagtech-vault",
+    "VAULT_DIGEST_DIR": "digest",
+    // GITHUB_TOKEN(fine-grained PAT)の有効期限。秘密ではないので vars に置き、
+    // 期限切れで黙って止まらないよう TOKEN_WARN_DAYS 日前から日報に WARN を出す。
+    // PAT を更新したらこの日付も必ず更新すること。
+    "GITHUB_TOKEN_EXPIRES": "2026-12-13",
+    "TOKEN_WARN_DAYS": "14"
+    // MENTION_USER_ID は社長指示によりファイル非記載。secret として投入する
+    // (RUN_KEY, DISCORD_WEBHOOK_ALERTS, DISCORD_WEBHOOK_DIGEST と同様)
+  },
+
+  "d1_databases": [
+    {
+      "binding": "NOTIFY_DB",
+      "database_name": "notify-gw",
+      "database_id": "da764bcc-b7b0-4fc6-90f9-f992c3d81a0f",
+      "migrations_dir": "migrations"
+    }
+  ]
+}

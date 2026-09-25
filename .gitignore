@@ -1,0 +1,9 @@
+# secrets / local state
+# 末尾に * を付けているのは、.run-key.txt.bak_* のような退避コピーも鍵そのものであり、
+# 1つでも追跡対象に入れば漏洩するため(2026-09-21、CR 除去時に作った .bak が
+# 未 ignore で残っていた)。鍵は「名前が完全一致したときだけ守る」形にしない。
+.run-key.txt*
+.dev.vars*
+.wrangler/
+node_modules/
+dist/

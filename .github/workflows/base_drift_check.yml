@@ -1,0 +1,89 @@
+name: 起点ずれ検出
+
+# ブランチの起点が main から古くなっていないかを PR 画面に赤として可視化する。
+#
+# 背景: GitHub Free では private リポジトリの branch protection / rulesets が
+# どちらも 403 で使えず、「Require branches to be up to date before merging」を
+# 設定できない(2026-09-15 実測)。その代替としてこのワークフローを置く。
+# 保護設定ではないのでマージを阻止する力は無い。赤として見せるところまでが役割。
+#
+# 重要な前提(実測で確認済み): 起点が古くてもマージでファイルが失われることはない。
+# merge commit / merge --squash / 三点差分の適用のいずれでも main 側のファイルは
+# 保たれる。この検査が防ぐのは「古い起点のまま作業を進めること」であって、
+# 「マージによる消失」ではない。詳細は scripts/base_drift_check.py の冒頭を参照。
+#
+# シークレットは一切使わない。外部通信も pip install も不要(標準ライブラリのみ)。
+# 日付・時刻にも依存しない(時刻依存で「毎日9時間だけ赤い」テストを作った前例があるため)。
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+    # 既存ワークフローは types: を書いていないが、ここだけ明示する。
+    # ラベル「起点ずれ承知」を付けた時点で赤を緑に戻すには labeled/unlabeled が
+    # 必要なため。既定値(opened/synchronize/reopened)を失わないよう3つとも列挙する。
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+  workflow_dispatch:
+    inputs:
+      head:
+        description: '検査するブランチ(例: origin/chore/cron-test-scaffold)。空なら実行中の ref'
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  base-drift:
+    name: 起点ずれ検出（main の未取り込み）
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: リポジトリをチェックアウト
+        uses: actions/checkout@v7
+        with:
+          # merge-base の算出に全履歴が要る。浅いクローンでは検査が成立しない。
+          fetch-depth: 0
+          # pull_request では checkout の既定は「マージ ref」(PR head を main に
+          # マージした仮想コミット)。そのツリーには main のファイルが既に入って
+          # いるため、指定を忘れると未取り込みが常に 0 件 = 常に緑になる。
+          # このワークフロー最大の落とし穴なので、下の「配線の検証」でも担保する。
+          ref: ${{ github.event.pull_request.head.sha || github.ref }}
+
+      - name: Python セットアップ
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - name: 判定ロジックの自己検証
+        # 判定が壊れていれば、このステップで CI 自体が赤くなる。
+        # 「壊れたまま静かに緑」を構造的に起こせないようにするための第1ステップ。
+        run: python scripts/base_drift_check.py --self-test
+
+      - name: 比較対象のブランチを取得
+        run: git fetch --no-tags --force origin +refs/heads/*:refs/remotes/origin/*
+
+      - name: 配線の検証（PR head を見ているか）
+        if: github.event_name == 'pull_request'
+        env:
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          if [ "$(git rev-parse HEAD)" != "$PR_HEAD" ]; then
+            echo "::error::HEAD が PR head ではありません（マージ ref を見ています）。"
+            echo "::error::checkout の ref: 指定を確認してください。この状態では検査が常に緑になります。"
+            exit 1
+          fi
+          echo "HEAD = PR head ($PR_HEAD) を確認しました。"
+
+      - name: 起点ずれの検査
+        env:
+          ALLOW: ${{ contains(github.event.pull_request.labels.*.name, '起点ずれ承知') && '1' || '0' }}
+          HEAD_REF: ${{ inputs.head || 'HEAD' }}
+        run: |
+          args=(--head "$HEAD_REF")
+          if [ "$ALLOW" = "1" ]; then
+            echo "ラベル「起点ずれ承知」を検出したため、起点ずれを許可します。"
+            args+=(--allow-drift)
+          fi
+          python scripts/base_drift_check.py "${args[@]}"

@@ -1,0 +1,137 @@
+name: Deploy
+
+# なぜ要るか:
+#   2026-09-18 に判明したとおり、このリポジトリには deploy.yml が無く、本番反映は
+#   手元の `wrangler deploy` が唯一の経路だった。その結果 2026-09-20 に tagtech-cron で
+#   「複数の場所から手元デプロイして互いの変更を本番から消し合う」事故が起きている
+#   (RUNBOOK §8-1-b-2 実例1/2、§8-5)。手元デプロイは人の注意力に依存し、
+#   誰がいつ何を配ったかも残らない。CI 経由にすれば起点・順序・記録が機械に固定される。
+#
+# 承認ゲートの位置:
+#   main への push = マージであり、**PR をマージする行為そのものが本番反映の承認**になる。
+#   tagtech-automation の deploy.yml と同じ方式に揃えてある。
+#   「マージと反映を分けたい」場合は `push:` ブロックを消せば workflow_dispatch のみになる。
+#
+# やらないこと:
+#   **D1 マイグレーションは流さない。** 適用は人が RUNBOOK §8-1-d の手順で行う
+#   (未適用の一覧を目視し、読み戻しの期待値を先に決めてから適用する)。
+#   スキーマ変更を自動で走らせると、壊れたときに「誰が流したか」が消える。
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      # デプロイ対象に関係ないファイル(docs/ など)では走らせない。
+      # ここに漏れがあると「変更したのに本番に出ない」ので、Worker の入力になる
+      # ファイルを追加したときは必ずこの一覧にも足すこと。
+      - 'src/**'
+      - 'wrangler.jsonc'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'tsconfig.json'
+      - '.github/workflows/deploy.yml'
+  workflow_dispatch:
+
+# 同時デプロイを禁止する。2026-09-20 の巻き戻しは「別の起点からのデプロイが重なった」型で、
+# 後から走った方が黙って勝つ。cancel-in-progress は使わない(走っているデプロイを
+# 途中で殺すと、どの版が本番に居るか分からなくなる)。
+concurrency:
+  group: deploy-notify-gw
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # 履歴を全部取る。浅いクローンだと origin/main が無く、起点の比較ができない。
+          # 2026-09-15 に tagtech-automation で「検査を足したらその前提(fetch-depth)が
+          # 無くて CI が4日赤のままだった」事故が起きている(RUNBOOK §7-1 実例5)。
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      # 必要な secret が「名前だけあって空」でも wrangler-action は分かりにくく失敗する。
+      # 2026-09-19〜21 に wrangler secret で同じ事故(空文字が Success で登録された)が
+      # 起きているので、ここで**どの名前が欠けているか**を明示して落とす。
+      # 値は出力しない(長さも出さない。GitHub のマスクに頼らず、そもそも触れない)。
+      - name: Check required secrets
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          missing=""
+          [ -n "$CLOUDFLARE_API_TOKEN" ]  || missing="$missing CLOUDFLARE_API_TOKEN"
+          [ -n "$CLOUDFLARE_ACCOUNT_ID" ] || missing="$missing CLOUDFLARE_ACCOUNT_ID"
+          if [ -n "$missing" ]; then
+            echo "::error::このリポジトリの Actions secret が未設定です:$missing"
+            echo "Settings > Secrets and variables > Actions で登録してください。"
+            exit 1
+          fi
+          echo "必須 secret 2 件を確認"
+
+      - run: npm ci
+
+      - run: npm run typecheck
+
+      # migrations/*.sql は fakeD1 が node:sqlite で順に適用するので、SQL の構文エラーもここで落ちる。
+      # デプロイ直前にもう一度回す(ci.yml が緑でも、マージで別の変更と合流している可能性がある)。
+      - run: npm test
+
+      - name: Deploy to Cloudflare Workers
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: deploy
+
+      # 「書き込みの成否は読み戻して確認する」(RUNBOOK 原則表)。
+      # deploy コマンドの成功は「アップロードできた」までしか証明しない。
+      # 認証必須のルートが 403 を返せば、新しい版が実際に応答している。
+      # 404 なら Worker に届いていない、200 なら認証が外れている(どちらも異常)。
+      - name: Read back (認証前の応答が 403 であること)
+        env:
+          URL: https://notify-gw.bb25xp.workers.dev/health
+        run: |
+          for i in 1 2 3 4 5; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' -m 10 "$URL" || echo 000)
+            echo "attempt $i: HTTP $code"
+            [ "$code" = "403" ] && exit 0
+            sleep 10
+          done
+          echo "::error::デプロイ後の読み戻しに失敗しました(最後の応答: $code / 期待: 403)"
+          exit 1
+
+      # デプロイ結果を証跡に残す。2026-09-12 に Actions のトークン失効で deploy が
+      # 4ヶ月失敗し続けても誰にも通知されなかった再発防止(RUNBOOK §7-1)。
+      # 通知の失敗でワークフローの結果は変えない(証跡が出せないこと自体は別の問題)。
+      - name: Report deploy result to notify-gw
+        if: always()
+        env:
+          NOTIFY_GW_URL: ${{ secrets.NOTIFY_GW_URL }}
+          NOTIFY_GW_KEY: ${{ secrets.NOTIFY_GW_KEY }}
+          JOB_STATUS: ${{ job.status }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          SHA: ${{ github.sha }}
+        run: |
+          if [ -z "$NOTIFY_GW_URL" ] || [ -z "$NOTIFY_GW_KEY" ]; then
+            echo "::warning::notify-gw の secret が未設定のため証跡を送れません(デプロイ自体は上の結果のとおり)"
+            exit 0
+          fi
+          if [ "$JOB_STATUS" = "success" ]; then
+            RESULT=success; SEVERITY=INFO; ERROR_KIND=""
+          else
+            RESULT=failure; SEVERITY=CRITICAL; ERROR_KIND="deploy_${JOB_STATUS}"
+          fi
+          curl -sS -m 10 -X POST "$NOTIFY_GW_URL/event" \
+            -H "X-Run-Key: $NOTIFY_GW_KEY" -H "Content-Type: application/json" \
+            -d "{\"agent_id\":\"github-actions/notify-gw\",\"action\":\"deploy\",\"target\":\"$SHA\",\"result\":\"$RESULT\",\"severity\":\"$SEVERITY\",\"error_kind\":\"$ERROR_KIND\",\"evidence_url\":\"$RUN_URL\"}" \
+            || echo "notify-gw report failed (ignored)"

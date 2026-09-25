@@ -1,0 +1,41 @@
+name: CI
+
+# CI が無いリポジトリは「失敗していない」のではなく「何も見ていない」だけ。
+# notify-gw は本番の証跡層なので、型と テストが壊れたことに気づける状態を保つ。
+on:
+  push:
+  pull_request:
+
+# この CI はシークレットを一切使わず、D1 にも本番にも触れない。トークンは読み取りのみ。
+# (tagtech 側で CLOUDFLARE_API_TOKEN の失効に4ヶ月気づけなかったため、意図的にトークン非依存にしている)
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          # tests は node:sqlite の DatabaseSync を使う(tests/helpers/fakeD1.ts)。
+          # 24 はローカル検証済みで、wrangler(>=22) と vitest(^20||^22||>=24) の両方を満たす。
+          # 22 系は minor によって --experimental-sqlite が要るため実機検証なしには選ばない。23 は vitest 対象外。
+          node-version: 24
+          cache: npm
+
+      - run: npm ci
+
+      - run: npm run typecheck
+
+      # migrations/*.sql は fakeD1 が node:sqlite で順に適用するので、SQL の構文エラーもここで落ちる
+      - run: npm test
+
+  # デプロイはこのワークフローに含めない。本番反映は deploy.yml（main への push = PR のマージ）が行う。
+  # 承認ゲートは「社長が PR をマージする」ことで維持される。CI と Deploy を分けているのは、
+  # PR の段階では secret を一切使わずに検査を回すため（トークン失効に気づけなくなるのを避ける）。
