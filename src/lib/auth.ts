@@ -34,3 +34,21 @@ export function isAuthorized(provided: string, expected: string | undefined): bo
   for (let i = 0; i < a.byteLength; i++) diff |= a[i] ^ b[i];
   return diff === 0;
 }
+
+export type AuthenticatedKey = "run_key" | "run_key_mt5" | null;
+
+/**
+ * RUN_KEY（全エンドポイント共通）と RUN_KEY_MT5（mt5-trader 専用の2本目の鍵）の
+ * どちらで通ったかを返す。RUN_KEY の判定は isAuthorized そのままで一切変えない。
+ *
+ * RUN_KEY_MT5 は /event 以外のエンドポイントでは使わないこと（呼び出し側で制御する）。
+ * ここでは鍵の一致だけを見る。agent_id の制限は呼び出し側（index.ts）の責務。
+ */
+export function authenticate(
+  provided: string,
+  env: { RUN_KEY?: string; RUN_KEY_MT5?: string },
+): AuthenticatedKey {
+  if (isAuthorized(provided, env.RUN_KEY)) return "run_key";
+  if (isAuthorized(provided, env.RUN_KEY_MT5)) return "run_key_mt5";
+  return null;
+}

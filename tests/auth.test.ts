@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { extractKey, isAuthorized } from "../src/lib/auth";
+import { extractKey, isAuthorized, authenticate } from "../src/lib/auth";
 
 function req(url: string, headers?: Record<string, string>): Request {
   return new Request(url, { headers });
@@ -50,5 +50,39 @@ describe("isAuthorized", () => {
 
   it("rejects different-length strings without throwing", () => {
     expect(isAuthorized("short", "muchlongersecret")).toBe(false);
+  });
+});
+
+describe("authenticate", () => {
+  const env = { RUN_KEY: "main-key", RUN_KEY_MT5: "mt5-key" };
+
+  it("returns 'run_key' when the key matches RUN_KEY", () => {
+    expect(authenticate("main-key", env)).toBe("run_key");
+  });
+
+  it("returns 'run_key_mt5' when the key matches RUN_KEY_MT5", () => {
+    expect(authenticate("mt5-key", env)).toBe("run_key_mt5");
+  });
+
+  it("returns null for a wrong key", () => {
+    expect(authenticate("wrong", env)).toBeNull();
+  });
+
+  it("returns null when RUN_KEY_MT5 is undefined, regardless of the provided value", () => {
+    const noMt5 = { RUN_KEY: "main-key" };
+    expect(authenticate("", noMt5)).toBeNull();
+    expect(authenticate("mt5-key", noMt5)).toBeNull();
+    expect(authenticate("anything", noMt5)).toBeNull();
+  });
+
+  it("returns null when RUN_KEY_MT5 is an empty string, regardless of the provided value", () => {
+    const emptyMt5 = { RUN_KEY: "main-key", RUN_KEY_MT5: "" };
+    expect(authenticate("", emptyMt5)).toBeNull();
+    expect(authenticate("mt5-key", emptyMt5)).toBeNull();
+    expect(authenticate("anything", emptyMt5)).toBeNull();
+  });
+
+  it("still authenticates RUN_KEY normally when RUN_KEY_MT5 is unset", () => {
+    expect(authenticate("main-key", { RUN_KEY: "main-key" })).toBe("run_key");
   });
 });

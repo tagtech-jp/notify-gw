@@ -1,6 +1,8 @@
 export interface Env {
   NOTIFY_DB: D1Database;
   RUN_KEY?: string;
+  /** mt5-trader 専用の2本目の鍵。/event 限定・agent_id="mt5-trader" のときのみ有効(2026-09-25) */
+  RUN_KEY_MT5?: string;
   DISCORD_WEBHOOK_ALERTS?: string;
   DISCORD_WEBHOOK_DIGEST?: string;
   MENTION_USER_ID?: string;

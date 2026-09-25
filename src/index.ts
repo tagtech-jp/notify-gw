@@ -1,6 +1,6 @@
 import type { Env } from "./types";
 import { evaluateExpectation, isExpectation, type Expectation } from "./lib/expectation";
-import { extractKey, isAuthorized } from "./lib/auth";
+import { extractKey, isAuthorized, authenticate } from "./lib/auth";
 import {
   insertEvent,
   markDiscordResult,
@@ -181,7 +181,12 @@ async function recordAndAlert(env: Env, input: RecordInput): Promise<RecordOutco
   return { id, fingerprint, discordSent, suppressed };
 }
 
-async function handleEvent(request: Request, env: Env): Promise<Response> {
+/**
+ * restrictAgentId が指定されているときは、その agent_id 以外を 403 で弾く。
+ * RUN_KEY_MT5 で認証された送信(mt5-trader専用)にだけ渡される(index.ts の /event ルート参照)。
+ * 通常の鍵不一致と同じ "Forbidden" を返し、スコープの存在を外部に漏らさない。
+ */
+async function handleEvent(request: Request, env: Env, restrictAgentId?: string): Promise<Response> {
   let body: unknown;
   try {
     body = await request.json();
@@ -189,6 +194,9 @@ async function handleEvent(request: Request, env: Env): Promise<Response> {
     return json({ error: "invalid_json" }, 400);
   }
   if (!isValidEventBody(body)) return json({ error: "invalid_body" }, 400);
+  if (restrictAgentId !== undefined && body.agent_id !== restrictAgentId) {
+    return text("Forbidden", 403);
+  }
 
   // 「成功と言っているが実体があるか」を機械判定する(LLM 不使用)。
   // result は送信側の申告をそのまま残す(events は追記専用で、申告を書き換えない)。
@@ -523,8 +531,10 @@ export default {
 
     if (url.pathname === "/event") {
       if (request.method !== "POST") return text("Method Not Allowed", 405, { Allow: "POST" });
-      if (!isAuthorized(key, env.RUN_KEY)) return text("Forbidden", 403);
-      return handleEvent(request, env);
+      // RUN_KEY_MT5(mt5-trader専用)はここでのみ有効。agent_id制限は handleEvent 側で掛ける。
+      const authed = authenticate(key, env);
+      if (authed === null) return text("Forbidden", 403);
+      return handleEvent(request, env, authed === "run_key_mt5" ? "mt5-trader" : undefined);
     }
 
     if (url.pathname === "/digest/preview") {

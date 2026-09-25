@@ -33,6 +33,11 @@
     "TOKEN_WARN_DAYS": "14"
     // MENTION_USER_ID は社長指示によりファイル非記載。secret として投入する
     // (RUN_KEY, DISCORD_WEBHOOK_ALERTS, DISCORD_WEBHOOK_DIGEST と同様)
+    //
+    // RUN_KEY_MT5(2026-09-25): mt5-trader 専用の2本目の X-Run-Key。/event 限定・
+    // body.agent_id="mt5-trader" のときのみ有効(他のエンドポイントやagent_idには使えない)。
+    // 漏洩したらこの secret だけを削除すれば mt5-trader からの送信のみ止められる
+    // (RUN_KEY・他の送信元には影響しない)。RUN_KEY のローテーションとは独立。
   },
 
   "d1_databases": [

@@ -80,12 +80,14 @@ SELECT * FROM digest_log ORDER BY date_jst DESC LIMIT 14;
 | Worker | 名前 | 用途 |
 |---|---|---|
 | notify-gw | `RUN_KEY` | 全エンドポイントの X-Run-Key。ローカル控え `.run-key.txt`（gitignore） |
+| notify-gw | `RUN_KEY_MT5` | mt5-trader 専用の2本目の X-Run-Key（2026-09-25）。`/event` 限定・`agent_id="mt5-trader"` のときのみ有効。漏洩時はこの secret だけを削除すれば mt5-trader からの送信だけを止められる（`RUN_KEY`・他の送信元には影響しない） |
 | notify-gw | `DISCORD_WEBHOOK_ALERTS` / `DISCORD_WEBHOOK_DIGEST` / `MENTION_USER_ID` | 通知先。ファイル・コミットには置かない |
 | tagtech-cron / vault-intel | `NOTIFY_GW_KEY` | notify-gw の `RUN_KEY` と同じ値 |
 | tagtech-cron | `DISCORD_WEBHOOK_ALERTS` | watchdog フォールバック直送用 |
 
 投入は必ず `printf '%s' "$VALUE" | npx wrangler secret put NAME`（投入前に `wc -c` で文字数確認）。
 `RUN_KEY` をローテーションしたら、送信元すべての `NOTIFY_GW_KEY` も同時に更新すること。
+`RUN_KEY_MT5` は `RUN_KEY` のローテーションとは独立（mt5-trader だけの専用鍵のため、RUN_KEY 側の更新に追従させる必要はない）。
 
 **対話プロンプトで投入するときは、アスタリスク（`*****`）が表示されることを確認してから Enter を押す。
 表示されなければ貼り付けが効いておらず、空文字が登録される。`✨ Success!` は空文字でも出る。**

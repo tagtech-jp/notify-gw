@@ -214,3 +214,77 @@ describe("洪水抑制 (flood suppression)", () => {
     expect(global.fetch).toHaveBeenCalledTimes(2);
   });
 });
+
+describe("RUN_KEY_MT5 (mt5-trader専用鍵)", () => {
+  beforeEach(() => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("accepts /event when RUN_KEY_MT5 is used with agent_id 'mt5-trader'", async () => {
+    const env = makeEnv({ RUN_KEY_MT5: "mt5-secret" });
+    const res = await worker.fetch(
+      postEvent({ agent_id: "mt5-trader", action: "order-placed", severity: "INFO" }, "mt5-secret"),
+      env,
+    );
+    expect(res.status).toBe(200);
+  });
+
+  it("rejects /event when RUN_KEY_MT5 is used with an agent_id other than 'mt5-trader'", async () => {
+    const env = makeEnv({ RUN_KEY_MT5: "mt5-secret" });
+    const res = await worker.fetch(
+      postEvent({ agent_id: "someone-else", action: "order-placed", severity: "INFO" }, "mt5-secret"),
+      env,
+    );
+    expect(res.status).toBe(403);
+  });
+
+  it("still authenticates the main RUN_KEY for any agent_id when RUN_KEY_MT5 is also configured", async () => {
+    const env = makeEnv({ RUN_KEY_MT5: "mt5-secret" });
+    const res = await worker.fetch(
+      postEvent({ agent_id: "someone-else", action: "order-placed", severity: "INFO" }),
+      env,
+    );
+    expect(res.status).toBe(200);
+  });
+
+  it("rejects /event with the RUN_KEY_MT5 value when RUN_KEY_MT5 is unset, no matter the header", async () => {
+    const env = makeEnv(); // RUN_KEY_MT5 not set
+    const withGuessedKey = await worker.fetch(
+      postEvent({ agent_id: "mt5-trader", action: "order-placed", severity: "INFO" }, "mt5-secret"),
+      env,
+    );
+    expect(withGuessedKey.status).toBe(403);
+
+    const withEmptyHeader = await worker.fetch(
+      new Request("https://notify-gw.test/event", {
+        method: "POST",
+        headers: { "x-run-key": "", "Content-Type": "application/json" },
+        body: JSON.stringify({ agent_id: "mt5-trader", action: "order-placed", severity: "INFO" }),
+      }),
+      env,
+    );
+    expect(withEmptyHeader.status).toBe(403);
+
+    const withNoHeader = await worker.fetch(
+      new Request("https://notify-gw.test/event", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ agent_id: "mt5-trader", action: "order-placed", severity: "INFO" }),
+      }),
+      env,
+    );
+    expect(withNoHeader.status).toBe(403);
+  });
+
+  it("does not accept RUN_KEY_MT5 on endpoints other than /event", async () => {
+    const env = makeEnv({ RUN_KEY_MT5: "mt5-secret" });
+    const res = await worker.fetch(
+      new Request("https://notify-gw.test/health", { headers: { "x-run-key": "mt5-secret" } }),
+      env,
+    );
+    expect(res.status).toBe(403);
+  });
+});
