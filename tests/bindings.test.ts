@@ -35,6 +35,11 @@ describe("expected_bindings (期待値は D1 が唯一の真実源)", () => {
     expect(await getExpectedBindings(db, "vault-sync")).toEqual([]);
   });
 
+  it("registers fuwacchi-feed as a liveness-only agent (PC 常駐の配信収録・ハートビート途絶のみ監視)", async () => {
+    const db = createFakeD1();
+    expect(await getExpectedBindings(db, "fuwacchi-feed")).toEqual([]);
+  });
+
   it("seeds the four workers from the migration", async () => {
     const db = createFakeD1();
     expect(await getExpectedBindings(db, "tagtech-cron")).toEqual(CRON_EXPECTED);
@@ -144,6 +149,7 @@ describe("auditBindings (24時間申告なし = stale)", () => {
     const db = createFakeD1();
     const drifts = await auditBindings(db, Date.now());
     expect(drifts.map((d) => d.agent_id).sort()).toEqual([
+      "fuwacchi-feed",
       "notify-gw",
       "tagtech-automation",
       "tagtech-cron",
@@ -163,6 +169,6 @@ describe("GET /bindings/audit", () => {
     );
     const data = (await res.json()) as { ok: boolean; drifts: Array<{ agent_id: string }> };
     expect(data.ok).toBe(false);
-    expect(data.drifts).toHaveLength(5);
+    expect(data.drifts).toHaveLength(6);
   });
 });
