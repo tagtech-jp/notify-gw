@@ -56,6 +56,18 @@ SELECT l.job_id FROM agent_ledger l
    AND l.job_id NOT IN (SELECT DISTINCT agent_id FROM events WHERE ts >= datetime('now','-7 day'));
 ```
 
+## 2-5. `#alerts` に「PC の常駐などから、生存の知らせが届いていません」が来た（速い死活監視・2026-10-05〜）
+既定の申告途絶の判定（26時間・日報のときだけ・#alerts は鳴らない）とは別に、`vars.FAST_LIVENESS` に書いた相手だけを
+15分ごとの cron（`*/15 * * * *`）が見張る（`src/lib/liveness.ts`）。2026-10-05 時点の対象は `fuwacchi-feed:150`
+（PC 常駐の配信収録。1時間ごとに `POST /heartbeat` を送るので、2回続けて届かなければ知らせる）。
+1. 送信元を確かめる。fuwacchi-feed なら PC の電源・ネット・タスク `\TagTech_FuwacchiLiveWatch`・`logs/app/watch.log` の `heartbeat` 行
+2. 解消は自動。申告が戻ると同じ `agent_id` + `action`（`liveness-stale`）の `success` が記録され、日報の未解消一覧から消える（人の確認操作は無い）
+- 1回の途絶につき1回だけ知らせる（最後の申告より後に `liveness-stale` の CRITICAL があれば、もう知らせない）
+- 一度も申告が無い相手（未配線）は知らせない（既定の判定と同じく日報の1行だけ）
+- この判定が動いている証拠は `events` の `agent_id='notify-gw/liveness' AND action='liveness-check'`（日本時間の1日に1件）。日報にこれが出ない日は、15分ごとの cron が止まっている（`notify-gw` の名前で残すと、自律度の計測で日報の成否と混ざるので分けている）
+- 対象を足す・しきい値を変えるときは `wrangler.jsonc` の `vars.FAST_LIVENESS`（PR → マージ → CI デプロイ）。相手そのものは `expected_bindings` に行が要る（§8-1-d）
+- `wrangler.jsonc` の `crons` は digest-daily（`5 0 * * *`）を先頭に置く。`scripts/agent_ledger_export.py` は最初の cron だけを notify-gw のジョブとして読むため、順を入れ替えると自律度の台帳がずれる
+
 ## 3. 手動照会 SQL（`npx wrangler d1 execute notify-gw --remote --command "..."`）
 
 ```sql
@@ -1486,7 +1498,9 @@ cherry-pick（tagtech `9db40db`）と 2026-09-20T20:45Z の再デプロイで行
 （本番は 2026-09-13 にそこからデプロイされている）ため、main への取り込みが先。
 
 デプロイ後は `binding_reports.reported_at`（§2-1・§3）が更新されることを確認する。
-止まっていれば 26 時間後に「死亡疑い」の警報になる。
+止まっていれば 26 時間後に日報の未解消一覧に出る（WARN の証跡は残るが #alerts は鳴らない。
+「死亡疑い」は notify-gw 自身の `/health` が落ちたときの tagtech-cron の警報で、別物。2026-10-05 にコードと照合して訂正）。
+速く知らせたい相手は §2-5 の `FAST_LIVENESS` に足す。
 
 ## 9. `gh` コマンドの事故防止
 

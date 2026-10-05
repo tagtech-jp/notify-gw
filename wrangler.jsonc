@@ -15,7 +15,10 @@
 
   "triggers": {
     "crons": [
-      "5 0 * * *" // JST 09:05  digest-daily
+      "5 0 * * *", // JST 09:05  digest-daily
+      // 15分ごと  liveness-fast(速い死活監視。FAST_LIVENESS の相手の申告途絶を #alerts へ)。
+      // agent_ledger_export.py はこのファイルの最初の cron だけを notify-gw のジョブとして読むので、必ず digest-daily の後ろに置く
+      "*/15 * * * *"
     ]
   },
 
@@ -30,7 +33,9 @@
     // 期限切れで黙って止まらないよう TOKEN_WARN_DAYS 日前から日報に WARN を出す。
     // PAT を更新したらこの日付も必ず更新すること。
     "GITHUB_TOKEN_EXPIRES": "2026-12-13",
-    "TOKEN_WARN_DAYS": "14"
+    "TOKEN_WARN_DAYS": "14",
+    // 速い死活監視の対象としきい値(分)。fuwacchi-feed は1時間ごとに申告するので、2回続けて届かなければ知らせる(2026-10-05)
+    "FAST_LIVENESS": "fuwacchi-feed:150"
     // MENTION_USER_ID は社長指示によりファイル非記載。secret として投入する
     // (RUN_KEY, DISCORD_WEBHOOK_ALERTS, DISCORD_WEBHOOK_DIGEST と同様)
     //

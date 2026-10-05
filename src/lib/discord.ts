@@ -94,6 +94,12 @@ const TEMPLATES: Array<{ prefix: string; what: string; todo: string }> = [
     todo: "wrangler tail でログ確認 → 再実行は手動実行の口から（&dry=1 で先に中身を確認）",
   },
   {
+    // 速い死活監視(liveness.ts)。PC の常駐のような Worker 以外の送信元向け(binding-report-stale は Worker 向けの文面)
+    prefix: "liveness-stale",
+    what: "PC の常駐などから、生存の知らせが届いていません",
+    todo: "PC の電源・ネット接続・常駐(タスクスケジューラ)を確認 → 知らせが戻れば自動で解消扱いになる",
+  },
+  {
     prefix: "unmapped-cron",
     what: "対応表にない cron が発火しました",
     todo: "CRON_MAP と wrangler の crons を 1:1 に揃える（片方だけ変更された可能性）",
