@@ -26,8 +26,19 @@ import { driftsToUnresolved } from "./lib/unresolved";
 import { commitFile } from "./lib/github";
 import { renderVaultSummary } from "./lib/vault_digest";
 import { checkTokenExpiry } from "./lib/token_expiry";
+import {
+  LIVENESS_ACTION,
+  LIVENESS_CHECK_AGENT,
+  parseFastLiveness,
+  findNewlyStale,
+  openLivenessAlert,
+  shouldRecordDailyCheck,
+  jstLabel,
+  minutesLabel,
+} from "./lib/liveness";
 
 const DIGEST_CRON = "5 0 * * *"; // JST 09:05
+const LIVENESS_CRON = "*/15 * * * *"; // 速い死活監視(lib/liveness.ts)
 
 function text(body: string, status: number, headers?: Record<string, string>): Response {
   return new Response(body, { status, headers: { "Content-Type": "text/plain; charset=utf-8", ...(headers ?? {}) } });
@@ -311,7 +322,58 @@ async function handleBindingReport(request: Request, env: Env): Promise<Response
     });
   }
 
+  // 速い死活監視で途絶を知らせていた相手から申告が戻ったら、解消を記録する。
+  // 同じ agent_id + action の success なので、日報の未解消一覧から機械的に消える(人の確認操作は設けない)
+  const openSince = await openLivenessAlert(env.NOTIFY_DB, body.agent_id);
+  if (openSince !== null) {
+    await recordAndAlert(env, {
+      agent_id: body.agent_id,
+      action: LIVENESS_ACTION,
+      target: `申告が戻った(途絶の知らせ ${jstLabel(openSince, Number(env.TZ_OFFSET_HOURS) || 9)} JST から)`,
+      result: "success",
+      severity: "INFO",
+      errorKind: LIVENESS_ACTION,
+    });
+  }
+
   return json({ ok: true, agent_id: body.agent_id, missing, reported_at: reportedAt });
+}
+
+/**
+ * 速い死活監視(15分ごとの cron)。FAST_LIVENESS の相手のうち、しきい値を超えて申告が途絶えた相手を
+ * CRITICAL で #alerts に知らせる(1回の途絶につき1回だけ・判定は lib/liveness.ts)。
+ * 判定が動いた証拠は1日1件だけ INFO で残す(この判定そのものが止まったときに、日報で気づけるように)。
+ */
+async function runLivenessCheck(env: Env, nowMs = Date.now()): Promise<{ alerted: string[] }> {
+  const tzOffset = Number(env.TZ_OFFSET_HOURS) || 9;
+  const targets = parseFastLiveness(env.FAST_LIVENESS);
+  if (targets.size === 0) return { alerted: [] };
+  const stale = await findNewlyStale(env.NOTIFY_DB, targets, nowMs);
+  for (const s of stale) {
+    await recordAndAlert(env, {
+      agent_id: s.agent_id,
+      action: LIVENESS_ACTION,
+      target: `${minutesLabel(s.elapsed_min)} 申告が届いていない(最終 ${jstLabel(s.reported_at, tzOffset)} JST・しきい値 ${minutesLabel(s.threshold_min)})`,
+      result: "failure",
+      severity: "CRITICAL",
+      errorKind: LIVENESS_ACTION,
+      meta: { reported_at: s.reported_at, threshold_min: s.threshold_min, elapsed_min: s.elapsed_min },
+    });
+  }
+  const { startUtc } = dayRangeUtc(jstDateString(new Date(nowMs), tzOffset), tzOffset);
+  if (await shouldRecordDailyCheck(env.NOTIFY_DB, startUtc)) {
+    await insertEvent(env.NOTIFY_DB, {
+      ts: nowIso(),
+      agent_id: LIVENESS_CHECK_AGENT,
+      action: "liveness-check",
+      target: `対象 ${targets.size}件・途絶 ${stale.length}件`,
+      result: "success",
+      severity: "INFO",
+      fingerprint: await computeFingerprint(LIVENESS_CHECK_AGENT, "liveness-check", "daily"),
+      meta: JSON.stringify({ targets: Object.fromEntries(targets) }),
+    });
+  }
+  return { alerted: stale.map((s) => s.agent_id) };
 }
 
 /**
@@ -389,9 +451,15 @@ async function buildDigestData(env: Env, dateJst: string): Promise<DigestData> {
   // 翌日には流れてしまったため(証跡も #alerts も日報も出ていたのに見逃された)。
   // 死活異常も同じ一覧に混ぜる。解消されるまで続く異常という点で CRITICAL と同じ性質で、
   // 実際 tagtech-cron の申告途絶は専用欄に出ていたのに2日間気づかれなかった。
+  // 速い死活監視が途絶を CRITICAL で記録した相手は、26時間の申告途絶(drift)と同じ異常なので2行に分けて出さない
+  const criticals = await listUnresolvedCriticals(env.NOTIFY_DB, endUtc);
+  const livenessAlerted = new Set(criticals.filter((c) => c.action === LIVENESS_ACTION).map((c) => c.agent_id));
   const unresolvedCriticals = [
-    ...(await listUnresolvedCriticals(env.NOTIFY_DB, endUtc)),
-    ...driftsToUnresolved(bindingDrifts, endUtc),
+    ...criticals,
+    ...driftsToUnresolved(
+      bindingDrifts.filter((d) => !(livenessAlerted.has(d.agent_id) && d.missing.length === 0)),
+      endUtc,
+    ),
   ];
   return {
     dateJst,
@@ -584,6 +652,10 @@ export default {
       // 自己申告は cron 実行時のみ。手動の /digest/run では走らせない
       // (preview と run の本文が一致するという契約を壊さないため)
       ctx.waitUntil(selfReportBindings(env).then(() => runDigest(env)).then(() => undefined));
+      return;
+    }
+    if (controller.cron === LIVENESS_CRON) {
+      ctx.waitUntil(runLivenessCheck(env).then(() => undefined));
       return;
     }
     // 対応表にないcronが発火した場合の証跡だけ残す(通知はしない。tagtech-cronの:160と役割分担)

@@ -18,6 +18,11 @@ export interface Env {
   GITHUB_TOKEN_EXPIRES?: string;
   /** 期限の何日前から警告するか */
   TOKEN_WARN_DAYS: string;
+  /**
+   * 速い死活監視の対象としきい値(「agent_id:分」をカンマ区切り。例 "fuwacchi-feed:150")。
+   * 15分ごとの cron が、最後の申告からしきい値を超えた相手を #alerts に知らせる(liveness.ts)。未設定なら何もしない
+   */
+  FAST_LIVENESS?: string;
 }
 
 export function requireSecrets(env: Env, keys: Array<keyof Env>): string[] {
