@@ -38,6 +38,7 @@ import {
   jstLabel,
   minutesLabel,
 } from "./lib/liveness";
+import { PROBE_ACTION, parseExternalProbes, probeHealth } from "./lib/probe";
 
 const DIGEST_CRON = "5 0 * * *"; // JST 09:05
 // 速い死活監視の cron(LIVENESS_CRON と、反映待ちの間に届く以前の式を含む LIVENESS_CRONS)は lib/liveness.ts で定義する
@@ -342,15 +343,54 @@ async function handleBindingReport(request: Request, env: Env): Promise<Response
 }
 
 /**
+ * 外形監視(15分ごとの cron・判定は lib/probe.ts)。EXTERNAL_PROBES の確認口を notify-gw(監視対象の外)から見に行き、
+ * 応答しなくなったら CRITICAL で #alerts に知らせる(未解消の probe-failed があれば重ねない＝1回の障害につき1回だけ)。
+ * 正常に戻ったら同じ agent_id + action の success を記録し、日報の未解消一覧から機械的に消す(#alerts には送らない)。
+ */
+async function runExternalProbes(env: Env, tzOffset: number): Promise<{ checked: number; failed: string[] }> {
+  const probes = parseExternalProbes(env.EXTERNAL_PROBES);
+  const failed: string[] = [];
+  for (const [agentId, url] of probes) {
+    const result = await probeHealth(url);
+    const openSince = await openLivenessAlert(env.NOTIFY_DB, agentId, PROBE_ACTION);
+    if (!result.ok) {
+      failed.push(agentId);
+      if (openSince !== null) continue;
+      await recordAndAlert(env, {
+        agent_id: agentId,
+        action: PROBE_ACTION,
+        target: `${url} が応答しない(${result.detail}・${result.attempts}回試した)`,
+        result: "failure",
+        severity: "CRITICAL",
+        errorKind: PROBE_ACTION,
+        meta: { url, status: result.status, detail: result.detail, attempts: result.attempts },
+      });
+    } else if (openSince !== null) {
+      await recordAndAlert(env, {
+        agent_id: agentId,
+        action: PROBE_ACTION,
+        target: `${url} の応答が戻った(知らせ ${jstLabel(openSince, tzOffset)} JST から)`,
+        result: "success",
+        severity: "INFO",
+        errorKind: PROBE_ACTION,
+      });
+    }
+  }
+  return { checked: probes.size, failed };
+}
+
+/**
  * 速い死活監視(15分ごとの cron)。FAST_LIVENESS の相手のうち、しきい値を超えて申告が途絶えた相手を
  * CRITICAL で #alerts に知らせる(1回の途絶につき1回だけ・判定は lib/liveness.ts)。
+ * 同じ cron で外形監視(EXTERNAL_PROBES)も動かす。
  * 判定が動いた証拠は1日1件だけ INFO で残す(この判定そのものが止まったときに、日報で気づけるように)。
  */
 async function runLivenessCheck(env: Env, nowMs = Date.now()): Promise<{ alerted: string[] }> {
   const tzOffset = Number(env.TZ_OFFSET_HOURS) || 9;
   const targets = parseFastLiveness(env.FAST_LIVENESS);
-  if (targets.size === 0) return { alerted: [] };
-  const stale = await findNewlyStale(env.NOTIFY_DB, targets, nowMs);
+  const probeTargets = parseExternalProbes(env.EXTERNAL_PROBES);
+  if (targets.size === 0 && probeTargets.size === 0) return { alerted: [] };
+  const stale = targets.size > 0 ? await findNewlyStale(env.NOTIFY_DB, targets, nowMs) : [];
   for (const s of stale) {
     await recordAndAlert(env, {
       agent_id: s.agent_id,
@@ -362,17 +402,20 @@ async function runLivenessCheck(env: Env, nowMs = Date.now()): Promise<{ alerted
       meta: { reported_at: s.reported_at, threshold_min: s.threshold_min, elapsed_min: s.elapsed_min },
     });
   }
+  const probes = probeTargets.size > 0 ? await runExternalProbes(env, tzOffset) : { checked: 0, failed: [] as string[] };
   const { startUtc } = dayRangeUtc(jstDateString(new Date(nowMs), tzOffset), tzOffset);
   if (await shouldRecordDailyCheck(env.NOTIFY_DB, startUtc)) {
     await insertEvent(env.NOTIFY_DB, {
       ts: nowIso(),
       agent_id: LIVENESS_CHECK_AGENT,
       action: "liveness-check",
-      target: `対象 ${targets.size}件・途絶 ${stale.length}件`,
+      target:
+        `対象 ${targets.size}件・途絶 ${stale.length}件` +
+        (probes.checked > 0 ? `・外形監視 ${probes.checked}件・応答なし ${probes.failed.length}件` : ""),
       result: "success",
       severity: "INFO",
       fingerprint: await computeFingerprint(LIVENESS_CHECK_AGENT, "liveness-check", "daily"),
-      meta: JSON.stringify({ targets: Object.fromEntries(targets) }),
+      meta: JSON.stringify({ targets: Object.fromEntries(targets), probes: Object.fromEntries(probeTargets) }),
     });
   }
   return { alerted: stale.map((s) => s.agent_id) };
@@ -464,7 +507,13 @@ async function buildDigestData(env: Env, dateJst: string): Promise<DigestData> {
     ),
   ];
   // 速い死活監視の判定そのものが動いていなければ、それも解消するまで毎日出す(バインディングの途絶と同じく「今」の状態)
-  const silent = await silentCheckRow(env.NOTIFY_DB, env.FAST_LIVENESS, Date.now(), endUtc);
+  const silent = await silentCheckRow(
+    env.NOTIFY_DB,
+    env.FAST_LIVENESS,
+    Date.now(),
+    endUtc,
+    parseExternalProbes(env.EXTERNAL_PROBES).size,
+  );
   if (silent) unresolvedCriticals.push(silent);
   return {
     dateJst,

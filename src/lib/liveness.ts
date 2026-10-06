@@ -90,10 +90,11 @@ export async function findNewlyStale(db: D1Database, targets: Map<string, number
 }
 
 /**
- * 解消していない liveness-stale の CRITICAL(同じ agent_id + action の success がまだ無いもの)の最新の時刻。
- * 無ければ null。申告が戻ったときに success を記録するかの判定に使う。
+ * 解消していない CRITICAL(同じ agent_id + action の success がまだ無いもの)の最新の時刻。無ければ null。
+ * 申告が戻ったときに success を記録するかの判定に使う。action の既定は liveness-stale。
+ * 外形監視(probe.ts)も同じ考え方なので、action に probe-failed を渡して使う
  */
-export async function openLivenessAlert(db: D1Database, agentId: string): Promise<string | null> {
+export async function openLivenessAlert(db: D1Database, agentId: string, action: string = LIVENESS_ACTION): Promise<string | null> {
   const row = await db
     .prepare(
       `SELECT c.ts FROM events c
@@ -104,7 +105,7 @@ export async function openLivenessAlert(db: D1Database, agentId: string): Promis
          )
        ORDER BY c.ts DESC LIMIT 1`,
     )
-    .bind(agentId, LIVENESS_ACTION)
+    .bind(agentId, action)
     .first<{ ts: string }>();
   return row?.ts ?? null;
 }
@@ -119,17 +120,19 @@ export async function shouldRecordDailyCheck(db: D1Database, dayStartUtc: string
 }
 
 /**
- * 判定そのものの沈黙(沈黙は異常)。FAST_LIVENESS があるのに、判定の証拠(liveness-check)が24時間以上無ければ、
+ * 判定そのものの沈黙(沈黙は異常)。FAST_LIVENESS か外形監視の対象があるのに、判定の証拠(liveness-check)が24時間以上無ければ、
  * 日報の未解消一覧に出す1行を返す。無ければ null。
  * 2026-10-05〜06 は定時実行が一度も起動しないまま約22時間誰も気づけなかった(証拠が「無い」ことを誰も見ていなかった)
+ * 外形監視(EXTERNAL_PROBES)も同じ15分ごとの cron で動き、同じ証拠を残すので、その件数を probeCount で受け取る
  */
 export async function silentCheckRow(
   db: D1Database,
   rawTargets: string | undefined,
   nowMs: number,
   asOfIso: string,
+  probeCount = 0,
 ): Promise<{ agent_id: string; action: string; summary: string; first_id: number; first_ts: string; count: number } | null> {
-  if (parseFastLiveness(rawTargets).size === 0) return null;
+  if (parseFastLiveness(rawTargets).size === 0 && probeCount === 0) return null;
   const row = await db
     .prepare(`SELECT MAX(ts) AS ts FROM events WHERE agent_id = ? AND action = 'liveness-check'`)
     .bind(LIVENESS_CHECK_AGENT)

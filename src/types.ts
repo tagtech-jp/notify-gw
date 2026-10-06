@@ -23,6 +23,11 @@ export interface Env {
    * 15分ごとの cron が、最後の申告からしきい値を超えた相手を #alerts に知らせる(liveness.ts)。未設定なら何もしない
    */
   FAST_LIVENESS?: string;
+  /**
+   * 外形監視の対象(「agent_id=URL」をカンマ区切り。例 "oborozuki-uranai=https://oborozuki.jp/api/health")。
+   * 15分ごとの cron が URL を見に行き、200 かつ JSON の ok が true でなければ #alerts に知らせる(probe.ts)。未設定なら何もしない
+   */
+  EXTERNAL_PROBES?: string;
 }
 
 export function requireSecrets(env: Env, keys: Array<keyof Env>): string[] {
