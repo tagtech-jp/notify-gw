@@ -2,7 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import worker from "../src/index";
 import { createFakeD1 } from "./helpers/fakeD1";
 import { insertEvent, listUnresolvedCriticals, upsertBindingReport } from "../src/lib/db";
-import { LIVENESS_ACTION, parseFastLiveness } from "../src/lib/liveness";
+import { readFileSync } from "node:fs";
+import { LIVENESS_ACTION, LIVENESS_CRON, parseFastLiveness } from "../src/lib/liveness";
 import type { Env } from "../src/types";
 
 function makeEnv(): Env {
@@ -24,7 +25,7 @@ function makeEnv(): Env {
 
 const NOW = Date.parse("2026-10-05T10:00:00.000Z"); // JST 19:00
 
-async function runCron(env: Env, cron = "*/15 * * * *"): Promise<void> {
+async function runCron(env: Env, cron = LIVENESS_CRON): Promise<void> {
   const pending: Promise<unknown>[] = [];
   const ctx = { waitUntil: (p: Promise<unknown>) => void pending.push(p), passThroughOnException() {} };
   await worker.scheduled({ cron, scheduledTime: Date.now(), noRetry() {} } as unknown as ScheduledController, env,
@@ -57,6 +58,21 @@ function heartbeat(): Request {
     body: JSON.stringify({ agent_id: "fuwacchi-feed" }),
   });
 }
+
+describe("wrangler.jsonc の crons", () => {
+  it("先頭は digest-daily のまま、速い死活監視の式はコードの LIVENESS_CRON と同じ文字列", () => {
+    // 1行ずつ、行コメントを外してから、引用符で囲まれた5項目の cron の式を拾う
+    // (agent_ledger_export.py も1行ずつ見て、最初の1件だけを notify-gw のジョブとして読む)
+    const crons = readFileSync(new URL("../wrangler.jsonc", import.meta.url), "utf-8")
+      .split(/\r?\n/)
+      .map((l) => l.replace(/\/\/.*$/, ""))
+      .map((l) => l.match(/"([0-9*/,A-Za-z-]+(?: [0-9*/,A-Za-z-]+){4})"/)?.[1])
+      .filter((c): c is string => c !== undefined);
+    expect(crons[0]).toBe("5 0 * * *");
+    expect(crons).toContain(LIVENESS_CRON);
+    expect(LIVENESS_CRON).not.toContain("/"); // 間隔指定(*/15)は 2026-10-05 に起動しなかった
+  });
+});
 
 describe("parseFastLiveness", () => {
   it("「agent_id:分」をカンマ区切りで読み、壊れた項目は捨てる", () => {
@@ -194,5 +210,53 @@ describe("速い死活監視(15分ごとの cron)", () => {
     expect(section).toHaveLength(1);
     expect(section[0]).toContain("liveness-stale");
     expect(body).toContain("fuwacchi-feed: 申告途絶"); // 死活の欄(現状の一覧)はそのまま出す
+  });
+
+  it("判定そのものが24時間動いていなければ、日報の未解消一覧に出す(沈黙は異常)", async () => {
+    const env = makeEnv();
+    vi.setSystemTime(Date.parse("2026-10-06T00:05:00.000Z")); // JST 10/06 09:05(日報は 10/05 分)
+    // 未解消一覧は上位5件まで。ほかの見張り対象は申告済みにして、確かめたい1行だけが出るようにする
+    for (const agentId of ["notify-gw", "tagtech-automation", "tagtech-cron", "vault-intel", "vault-sync", "fuwacchi-feed"]) {
+      await upsertBindingReport(env.NOTIFY_DB, {
+        agentId, bindings: [], missing: [], reportedAt: new Date(Date.now() - 10 * 60 * 1000).toISOString(),
+      });
+    }
+    const preview = async () =>
+      (await worker.fetch(
+        new Request("https://notify-gw.test/digest/preview?date=2026-10-05", { headers: { "x-run-key": "test-run-key" } }),
+        env,
+      )).text();
+
+    expect(await preview()).toContain("notify-gw/liveness liveness-check-missing: 速い死活監視の判定が一度も動いていない");
+
+    // 判定が動けば(証拠が24時間以内にあれば)出さない
+    vi.setSystemTime(Date.parse("2026-10-05T15:00:30.000Z")); // JST 10/06 00:00 過ぎの最初の判定
+    await reportAt(env, 10 * 60 * 1000);
+    await runCron(env);
+    vi.setSystemTime(Date.parse("2026-10-06T00:05:00.000Z"));
+    expect(await preview()).not.toContain("liveness-check-missing");
+
+    // 最後の証拠から24時間を超えたら、また出す
+    vi.setSystemTime(Date.parse("2026-10-06T15:30:00.000Z"));
+    expect(await preview()).toContain("速い死活監視の判定が24時間以上動いていない");
+
+    // FAST_LIVENESS が空なら見張っていないので出さない
+    const off = { ...makeEnv(), FAST_LIVENESS: "" };
+    const res = await worker.fetch(
+      new Request("https://notify-gw.test/digest/preview?date=2026-10-05", { headers: { "x-run-key": "test-run-key" } }),
+      off,
+    );
+    expect(await res.text()).not.toContain("liveness-check-missing");
+  });
+
+  it("古い式(*/15)で起動されても判定は走らず、対応表にない cron として証跡だけ残る", async () => {
+    const env = makeEnv();
+    await reportAt(env, 151 * 60 * 1000);
+    await runCron(env, "*/15 * * * *");
+    expect(await livenessEvents(env)).toEqual([]);
+    const row = await env.NOTIFY_DB.prepare(
+      `SELECT target FROM events WHERE agent_id = 'notify-gw' AND action = 'scheduled'`,
+    ).first<{ target: string }>();
+    expect(row?.target).toBe("*/15 * * * *");
   });
 });

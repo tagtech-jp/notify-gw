@@ -16,6 +16,12 @@
 
 export const LIVENESS_ACTION = "liveness-stale";
 /**
+ * 判定を動かす cron の式。wrangler.jsonc の crons にも同じ文字列を書く(テストで一致を確かめる)。
+ * 2026-10-05 に "*\/15 * * * *" で登録したところ、管理画面には「Every 15 minutes」と出て次の実行予定も表示されたのに、
+ * 約22時間一度も起動しなかった(同じ Worker の "5 0 * * *" は毎日動いていた)。時刻を並べる形に変えた
+ */
+export const LIVENESS_CRON = "0,15,30,45 * * * *";
+/**
  * 判定が動いた証拠(1日1件)の agent_id。tagtech-cron と同じ「Worker名/ジョブ名」にする。
  * "notify-gw" で残すと、自律度の計測(events.agent_id = job_id)で日報が失敗した日も notify-gw の成功日に数えてしまう
  */
@@ -102,6 +108,37 @@ export async function shouldRecordDailyCheck(db: D1Database, dayStartUtc: string
     .bind(LIVENESS_CHECK_AGENT, dayStartUtc)
     .first<{ hit: number }>();
   return !row;
+}
+
+/**
+ * 判定そのものの沈黙(沈黙は異常)。FAST_LIVENESS があるのに、判定の証拠(liveness-check)が24時間以上無ければ、
+ * 日報の未解消一覧に出す1行を返す。無ければ null。
+ * 2026-10-05〜06 は定時実行が一度も起動しないまま約22時間誰も気づけなかった(証拠が「無い」ことを誰も見ていなかった)
+ */
+export async function silentCheckRow(
+  db: D1Database,
+  rawTargets: string | undefined,
+  nowMs: number,
+  asOfIso: string,
+): Promise<{ agent_id: string; action: string; summary: string; first_id: number; first_ts: string; count: number } | null> {
+  if (parseFastLiveness(rawTargets).size === 0) return null;
+  const row = await db
+    .prepare(`SELECT MAX(ts) AS ts FROM events WHERE agent_id = ? AND action = 'liveness-check'`)
+    .bind(LIVENESS_CHECK_AGENT)
+    .first<{ ts: string | null }>();
+  const last = row?.ts ?? null;
+  if (last !== null && nowMs - Date.parse(last) <= 24 * 3600 * 1000) return null;
+  return {
+    agent_id: LIVENESS_CHECK_AGENT,
+    action: "liveness-check-missing",
+    summary:
+      last === null
+        ? "速い死活監視の判定が一度も動いていない(定時実行が起動していない可能性。管理画面の Trigger Events と wrangler tail で確認)"
+        : `速い死活監視の判定が24時間以上動いていない(最終 ${last})`,
+    first_id: -1, // 証跡IDは持たない(driftsToUnresolved と同じ表し方)
+    first_ts: last ?? asOfIso,
+    count: 1,
+  };
 }
 
 /** 日本時間の「MM/DD HH:MM」。通知の本文用 */
