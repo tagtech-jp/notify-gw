@@ -78,6 +78,21 @@ SELECT l.job_id FROM agent_ledger l
 - 対象を足す・しきい値を変えるときは `wrangler.jsonc` の `vars.FAST_LIVENESS`（PR → マージ → CI デプロイ）。相手そのものは `expected_bindings` に行が要る（§8-1-d）
 - `wrangler.jsonc` の `crons` は digest-daily（`5 0 * * *`）を先頭に置く。`scripts/agent_ledger_export.py` は最初の cron だけを notify-gw のジョブとして読むため、順を入れ替えると自律度の台帳がずれる
 
+## 2-6. `#alerts` に「…/api/health が応答しない」が来た（外形監視・2026-10-07〜）
+自分では申告しない Web サイトのために、notify-gw（監視対象の外）から確認口を見に行く。`vars.EXTERNAL_PROBES`（「agent_id=URL」・https のみ）を
+§2-5 と同じ15分ごとの cron（`src/lib/probe.ts`）が GET し、**3回（5秒おき）試して、200 かつ JSON の `ok` が `true` にならなければ** CRITICAL（action `probe-failed`）で知らせる。
+2026-10-07 時点の対象は次の1つ。
+- `oborozuki-uranai=https://oborozuki.jp/api/health`（占いサイト。確認口は D1 の `orders` 表と回数制限の束縛の有無を返すだけで、本番の処理は動かさない）
+1. 通知の本文の理由を見る。ブラウザで同じ URL を開くと同じ JSON が見える
+   - `HTTP 503・db=false` → D1（migration の適用漏れ・D1 の障害）。`drawLimiter=false` / `checkoutLimiter=false` → 相手の `wrangler.jsonc` の `ratelimits`
+   - `接続できない(…)` / `10秒で応答なし` / `HTTP 5xx・JSON ではない応答` → サイト全体（Cloudflare の障害・DNS・直前のデプロイ）
+2. 相手の直近のデプロイ（GitHub Actions の Deploy）と Workers Logs を確かめる。**手元からのデプロイで回避しない**（本番は CI 経由のみ）
+3. 解消は自動。確認口が正常に戻ると、同じ `agent_id` + `action`（`probe-failed`）の `success` が記録され、日報の未解消一覧から消える（人の確認操作は無い・#alerts には送らない）
+- 1回の障害につき1回だけ知らせる（未解消の `probe-failed` があれば重ねない）。未解消のあいだは日報の未解消一覧に毎日出る
+- 1回目だけ失敗して2回目・3回目で戻る一時的な揺れでは知らせない
+- 判定が動いている証拠は §2-5 と同じ `liveness-check`（`target` に「外形監視 N件・応答なし M件」が付く）。外形監視だけの設定でも、証拠が24時間無ければ `liveness-check-missing` が出る
+- 対象を足すときは `wrangler.jsonc` の `vars.EXTERNAL_PROBES`（PR → マージ → CI デプロイ）。**見に行く先は読み取りだけの確認口にする**（本番の処理を動かす URL・鍵が要る URL は入れない）
+
 ## 3. 手動照会 SQL（`npx wrangler d1 execute notify-gw --remote --command "..."`）
 
 ```sql
