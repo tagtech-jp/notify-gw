@@ -29,6 +29,8 @@ import { checkTokenExpiry } from "./lib/token_expiry";
 import {
   LIVENESS_ACTION,
   LIVENESS_CHECK_AGENT,
+  LIVENESS_CRON,
+  silentCheckRow,
   parseFastLiveness,
   findNewlyStale,
   openLivenessAlert,
@@ -38,7 +40,7 @@ import {
 } from "./lib/liveness";
 
 const DIGEST_CRON = "5 0 * * *"; // JST 09:05
-const LIVENESS_CRON = "*/15 * * * *"; // 速い死活監視(lib/liveness.ts)
+// 速い死活監視の cron(LIVENESS_CRON)は lib/liveness.ts で定義する(wrangler.jsonc と一致することをテストで確かめる)
 
 function text(body: string, status: number, headers?: Record<string, string>): Response {
   return new Response(body, { status, headers: { "Content-Type": "text/plain; charset=utf-8", ...(headers ?? {}) } });
@@ -461,6 +463,9 @@ async function buildDigestData(env: Env, dateJst: string): Promise<DigestData> {
       endUtc,
     ),
   ];
+  // 速い死活監視の判定そのものが動いていなければ、それも解消するまで毎日出す(バインディングの途絶と同じく「今」の状態)
+  const silent = await silentCheckRow(env.NOTIFY_DB, env.FAST_LIVENESS, Date.now(), endUtc);
+  if (silent) unresolvedCriticals.push(silent);
   return {
     dateJst,
     ...agg,

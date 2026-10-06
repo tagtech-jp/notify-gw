@@ -58,13 +58,15 @@ SELECT l.job_id FROM agent_ledger l
 
 ## 2-5. `#alerts` に「PC の常駐などから、生存の知らせが届いていません」が来た（速い死活監視・2026-10-05〜）
 既定の申告途絶の判定（26時間・日報のときだけ・#alerts は鳴らない）とは別に、`vars.FAST_LIVENESS` に書いた相手だけを
-15分ごとの cron（`*/15 * * * *`）が見張る（`src/lib/liveness.ts`）。2026-10-05 時点の対象は `fuwacchi-feed:150`
+15分ごとの cron（`0,15,30,45 * * * *`・`src/lib/liveness.ts` の `LIVENESS_CRON`）が見張る。2026-10-05 時点の対象は `fuwacchi-feed:150`
 （PC 常駐の配信収録。1時間ごとに `POST /heartbeat` を送るので、2回続けて届かなければ知らせる）。
 1. 送信元を確かめる。fuwacchi-feed なら PC の電源・ネット・タスク `\TagTech_FuwacchiLiveWatch`・`logs/app/watch.log` の `heartbeat` 行
 2. 解消は自動。申告が戻ると同じ `agent_id` + `action`（`liveness-stale`）の `success` が記録され、日報の未解消一覧から消える（人の確認操作は無い）
 - 1回の途絶につき1回だけ知らせる（最後の申告より後に `liveness-stale` の CRITICAL があれば、もう知らせない）
 - 一度も申告が無い相手（未配線）は知らせない（既定の判定と同じく日報の1行だけ）
-- この判定が動いている証拠は `events` の `agent_id='notify-gw/liveness' AND action='liveness-check'`（日本時間の1日に1件）。日報にこれが出ない日は、15分ごとの cron が止まっている（`notify-gw` の名前で残すと、自律度の計測で日報の成否と混ざるので分けている）
+- この判定が動いている証拠は `events` の `agent_id='notify-gw/liveness' AND action='liveness-check'`（日本時間の1日に1件）。`notify-gw` の名前で残すと、自律度の計測で日報の成否と混ざるので分けている
+- 証拠が24時間以上無いと、日報の未解消一覧に `notify-gw/liveness liveness-check-missing` が出る（解消するまで毎日）。出たら、管理画面の Trigger Events に `0,15,30,45 * * * *` があるかと、`wrangler tail notify-gw --format pretty` に15分ごとの起動が出るかを確かめる
+- 2026-10-05 の初版は `*/15 * * * *` で登録した。管理画面には「Every 15 minutes」と次の実行予定まで出ていたのに、約22時間一度も起動しなかった（同じ Worker の `5 0 * * *` は毎日動いていた。`wrangler tail` にも起動が出ず、D1 に証拠0件）。時刻を並べる形に変え、`wrangler.jsonc` と `LIVENESS_CRON` の一致をテストで確かめるようにした。**登録の成功表示と管理画面の表示は、起動の証明にならない。証拠の記録を読み戻して確かめる**
 - 対象を足す・しきい値を変えるときは `wrangler.jsonc` の `vars.FAST_LIVENESS`（PR → マージ → CI デプロイ）。相手そのものは `expected_bindings` に行が要る（§8-1-d）
 - `wrangler.jsonc` の `crons` は digest-daily（`5 0 * * *`）を先頭に置く。`scripts/agent_ledger_export.py` は最初の cron だけを notify-gw のジョブとして読むため、順を入れ替えると自律度の台帳がずれる
 

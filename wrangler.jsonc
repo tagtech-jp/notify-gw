@@ -17,8 +17,10 @@
     "crons": [
       "5 0 * * *", // JST 09:05  digest-daily
       // 15分ごと  liveness-fast(速い死活監視。FAST_LIVENESS の相手の申告途絶を #alerts へ)。
-      // agent_ledger_export.py はこのファイルの最初の cron だけを notify-gw のジョブとして読むので、必ず digest-daily の後ろに置く
-      "*/15 * * * *"
+      // agent_ledger_export.py はこのファイルの最初の cron だけを notify-gw のジョブとして読むので、必ず digest-daily の後ろに置く。
+      // src/lib/liveness.ts の LIVENESS_CRON と同じ文字列にする(テストで一致を確かめる)。
+      // 2026-10-05 に "*/15 * * * *" で登録したら、管理画面に出ているのに約22時間一度も起動しなかったので、時刻を並べる形にした
+      "0,15,30,45 * * * *"
     ]
   },
 
