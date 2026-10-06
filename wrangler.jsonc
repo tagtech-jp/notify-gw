@@ -38,7 +38,11 @@
     "TOKEN_WARN_DAYS": "14",
     // 速い死活監視の対象としきい値(分)。fuwacchi-feed は1時間ごとに申告するので、2回続けて届かなければ知らせる(2026-10-05)。
     // erupi-commentbot(コメントボット)は5分ごとに申告するので、15分(3回分)届かなければ知らせる(2026-10-07)
-    "FAST_LIVENESS": "fuwacchi-feed:150,erupi-commentbot:15"
+    "FAST_LIVENESS": "fuwacchi-feed:150,erupi-commentbot:15",
+    // 外形監視の対象(「agent_id=URL」をカンマ区切り・https のみ)。速い死活監視と同じ15分ごとの cron で URL を見に行き、
+    // 3回(5秒おき)試して 200 かつ JSON の ok が true にならなければ #alerts に知らせる(src/lib/probe.ts)。
+    // oborozuki-uranai(占いサイト oborozuki.jp)の確認口は D1 と回数制限の束縛を確かめるだけで、本番の処理は動かさない(2026-10-07)
+    "EXTERNAL_PROBES": "oborozuki-uranai=https://oborozuki.jp/api/health"
     // MENTION_USER_ID は社長指示によりファイル非記載。secret として投入する
     // (RUN_KEY, DISCORD_WEBHOOK_ALERTS, DISCORD_WEBHOOK_DIGEST と同様)
     //
