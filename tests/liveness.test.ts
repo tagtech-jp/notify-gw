@@ -3,7 +3,7 @@ import worker from "../src/index";
 import { createFakeD1 } from "./helpers/fakeD1";
 import { insertEvent, listUnresolvedCriticals, upsertBindingReport } from "../src/lib/db";
 import { readFileSync } from "node:fs";
-import { LIVENESS_ACTION, LIVENESS_CRON, parseFastLiveness } from "../src/lib/liveness";
+import { LIVENESS_ACTION, LIVENESS_CRON, LIVENESS_CRONS, parseFastLiveness } from "../src/lib/liveness";
 import type { Env } from "../src/types";
 
 function makeEnv(): Env {
@@ -70,7 +70,7 @@ describe("wrangler.jsonc の crons", () => {
       .filter((c): c is string => c !== undefined);
     expect(crons[0]).toBe("5 0 * * *");
     expect(crons).toContain(LIVENESS_CRON);
-    expect(LIVENESS_CRON).not.toContain("/"); // 間隔指定(*/15)は 2026-10-05 に起動しなかった
+    expect(LIVENESS_CRONS.has(LIVENESS_CRON)).toBe(true);
   });
 });
 
@@ -249,14 +249,25 @@ describe("速い死活監視(15分ごとの cron)", () => {
     expect(await res.text()).not.toContain("liveness-check-missing");
   });
 
-  it("古い式(*/15)で起動されても判定は走らず、対応表にない cron として証跡だけ残る", async () => {
+  it("反映待ちの間に古い式(*/15)で起動されても判定する(2026-10-06 実測: 式を変えた後も古い式で起動された)", async () => {
     const env = makeEnv();
     await reportAt(env, 151 * 60 * 1000);
     await runCron(env, "*/15 * * * *");
+    expect((await livenessEvents(env)).map((e) => e.severity)).toEqual(["CRITICAL"]);
+    const unmapped = await env.NOTIFY_DB.prepare(
+      `SELECT COUNT(*) AS n FROM events WHERE agent_id = 'notify-gw' AND action = 'scheduled'`,
+    ).first<{ n: number }>();
+    expect(unmapped?.n).toBe(0);
+  });
+
+  it("どちらでもない cron は判定せず、対応表にない cron として証跡だけ残る", async () => {
+    const env = makeEnv();
+    await reportAt(env, 151 * 60 * 1000);
+    await runCron(env, "1 2 * * *");
     expect(await livenessEvents(env)).toEqual([]);
     const row = await env.NOTIFY_DB.prepare(
       `SELECT target FROM events WHERE agent_id = 'notify-gw' AND action = 'scheduled'`,
     ).first<{ target: string }>();
-    expect(row?.target).toBe("*/15 * * * *");
+    expect(row?.target).toBe("1 2 * * *");
   });
 });
