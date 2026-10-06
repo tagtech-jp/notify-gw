@@ -29,7 +29,7 @@ import { checkTokenExpiry } from "./lib/token_expiry";
 import {
   LIVENESS_ACTION,
   LIVENESS_CHECK_AGENT,
-  LIVENESS_CRON,
+  LIVENESS_CRONS,
   silentCheckRow,
   parseFastLiveness,
   findNewlyStale,
@@ -40,7 +40,7 @@ import {
 } from "./lib/liveness";
 
 const DIGEST_CRON = "5 0 * * *"; // JST 09:05
-// 速い死活監視の cron(LIVENESS_CRON)は lib/liveness.ts で定義する(wrangler.jsonc と一致することをテストで確かめる)
+// 速い死活監視の cron(LIVENESS_CRON と、反映待ちの間に届く以前の式を含む LIVENESS_CRONS)は lib/liveness.ts で定義する
 
 function text(body: string, status: number, headers?: Record<string, string>): Response {
   return new Response(body, { status, headers: { "Content-Type": "text/plain; charset=utf-8", ...(headers ?? {}) } });
@@ -659,7 +659,7 @@ export default {
       ctx.waitUntil(selfReportBindings(env).then(() => runDigest(env)).then(() => undefined));
       return;
     }
-    if (controller.cron === LIVENESS_CRON) {
+    if (LIVENESS_CRONS.has(controller.cron)) {
       ctx.waitUntil(runLivenessCheck(env).then(() => undefined));
       return;
     }
