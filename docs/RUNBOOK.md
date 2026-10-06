@@ -58,9 +58,13 @@ SELECT l.job_id FROM agent_ledger l
 
 ## 2-5. `#alerts` に「PC の常駐などから、生存の知らせが届いていません」が来た（速い死活監視・2026-10-05〜）
 既定の申告途絶の判定（26時間・日報のときだけ・#alerts は鳴らない）とは別に、`vars.FAST_LIVENESS` に書いた相手だけを
-15分ごとの cron（`0,15,30,45 * * * *`・`src/lib/liveness.ts` の `LIVENESS_CRON`）が見張る。2026-10-05 時点の対象は `fuwacchi-feed:150`
-（PC 常駐の配信収録。1時間ごとに `POST /heartbeat` を送るので、2回続けて届かなければ知らせる）。
-1. 送信元を確かめる。fuwacchi-feed なら PC の電源・ネット・タスク `\TagTech_FuwacchiLiveWatch`・`logs/app/watch.log` の `heartbeat` 行
+15分ごとの cron（`0,15,30,45 * * * *`・`src/lib/liveness.ts` の `LIVENESS_CRON`）が見張る。2026-10-07 時点の対象は次の2つ。
+- `fuwacchi-feed:150`（PC 常駐の配信収録。1時間ごとに `POST /heartbeat` を送るので、2回続けて届かなければ知らせる）
+- `erupi-commentbot:15`（PC 常駐のコメントボット。5分ごとに `POST /heartbeat` を送るので、15分（3回分）届かなければ知らせる。2026-10-07 追加。
+  10/6 22:21〜22:25 に配信中のボットが止まったが、ボットの中のログにしか残らず誰も気づけなかった）
+1. 送信元を確かめる。fuwacchi-feed なら PC の電源・ネット・タスク `\TagTech_FuwacchiLiveWatch`・`logs/app/watch.log` の `heartbeat` 行。
+   erupi-commentbot なら PC の電源・ネット・タスク `\TagTech_ErupiCommentBot`・`D:/tagtech/projects/erupi-commentbot/logs/bot_YYYYMMDD.log` の `[alive]` 行
+   （鍵が未設定・相手が未登録のときは `[alive] notify-gw への生存の知らせ: …` に理由が出る）
 2. 解消は自動。申告が戻ると同じ `agent_id` + `action`（`liveness-stale`）の `success` が記録され、日報の未解消一覧から消える（人の確認操作は無い）
 - 1回の途絶につき1回だけ知らせる（最後の申告より後に `liveness-stale` の CRITICAL があれば、もう知らせない）
 - 一度も申告が無い相手（未配線）は知らせない（既定の判定と同じく日報の1行だけ）
